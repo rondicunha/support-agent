@@ -1,7 +1,8 @@
-"""Command-line entry point: sends a single prompt to Gemini and prints the answer.
+"""Command-line chat with the RubroRota support agent.
 
 Usage:
-    python -m support_agent "What are your support hours?"
+    python -m support_agent
+Type "sair" (or press Ctrl+C) to quit.
 """
 
 import sys
@@ -9,35 +10,50 @@ import sys
 from google import genai
 from google.genai import errors
 
+from support_agent.agent import SupportAgent
 from support_agent.config import ConfigError, load_settings
+from support_agent.faq import load_faq
+from support_agent.tickets import TicketService
 
-DEFAULT_PROMPT = "In one sentence, what can a customer support assistant help with?"
+EXIT_COMMANDS = {"sair", "exit", "quit"}
 
 
 def main() -> int:
-    """Run the CLI and return a process exit code (0 = success)."""
-    # sys.argv[0] is the program name; everything after it is the user's prompt.
-    prompt = " ".join(sys.argv[1:]) or DEFAULT_PROMPT
-
+    """Run the interactive chat and return a process exit code (0 = success)."""
     try:
         settings = load_settings()
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 1
 
-    client = genai.Client(api_key=settings.gemini_api_key)
+    agent = SupportAgent(
+        client=genai.Client(api_key=settings.gemini_api_key),
+        model=settings.gemini_model,
+        faq=load_faq(),
+        tickets=TicketService(),
+    )
 
-    try:
-        response = client.models.generate_content(
-            model=settings.gemini_model,
-            contents=prompt,
-        )
-    except errors.APIError as exc:
-        print(f"Gemini API error ({exc.code}): {exc.message}", file=sys.stderr)
-        return 1
+    print("Assistente RubroRota. Digite 'sair' para encerrar.\n")
+    while True:
+        try:
+            message = input("Você: ").strip()
+        except (KeyboardInterrupt, EOFError):  # Ctrl+C / Ctrl+Z (end of input)
+            print()
+            return 0
 
-    print(response.text)
-    return 0
+        if not message:
+            continue
+        if message.lower() in EXIT_COMMANDS:
+            return 0
+
+        try:
+            reply = agent.ask(message)
+        except errors.APIError as exc:
+            # One failed request should not end the whole conversation.
+            print(f"Gemini API error ({exc.code}): {exc.message}", file=sys.stderr)
+            continue
+
+        print(f"Assistente: {reply}\n")
 
 
 if __name__ == "__main__":
